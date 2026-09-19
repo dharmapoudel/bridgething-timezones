@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 — 2026-09-19
+
+- Fixed the app icon: back to the SVG Orbit icon. The 0.3.1 PNG rasterization
+  didn't display; the SVG is what shipped (and worked) in 0.2.0/0.3.0.
+
 ## 0.3.1 — 2026-09-19
 
 - Code cleanup: extracted the shared zone-record parser used by JSON config

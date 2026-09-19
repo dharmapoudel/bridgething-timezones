@@ -22,8 +22,8 @@
     }
   ],
   "description": "World clock grid in the style of worldtimebuddy. The knob moves the time line; the window slides as you scroll.",
-  "icon": "icon.png",
+  "icon": "icon.svg",
   "id": "6aadfb91-01a0-7063-888b-e551ca7b4771",
   "name": "Timezones",
-  "version": "0.3.1"
+  "version": "0.3.2"
 }
