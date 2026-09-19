@@ -1,6 +1,6 @@
 import { BridgethingClient } from '@bridgething/client';
 import { daemonUrl } from '@bridgething/webapp-shared/daemon';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_ZONES_CONFIG,
   HOUR_MS,
@@ -11,8 +11,10 @@ import {
   diffLabel,
   displayAbbr,
   hourLabel,
+  isOverlapAt,
   isOverlapHour,
   nextHourFormat,
+  nextOverlapMs,
   normalizeHourFormat,
   offsetMinutesAt,
   parseZonesConfig,
@@ -29,6 +31,8 @@ const CONFIG_TIMEOUT_MS = 1500;
 const FORMAT_OVERRIDE_KEY = 'timezones.hourFormat.v1';
 const TICK_MS = 15_000;
 const LABEL_COL_PX = 168;
+/** Wheel detents arriving faster than this are a flick: each jumps a day. */
+const FLICK_MS = 100;
 
 type View = { cursorMs: number; windowStart: number };
 
@@ -67,6 +71,16 @@ function readFormatOverride(): HourFormat | null {
   }
 }
 
+/** Test seam (not user-facing): `?zones=` overrides the companion config. */
+function readZonesOverride(): string | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get('zones');
+    return v && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 const TINT_CLASS: Record<string, string> = {
   work: 'bg-white/[0.10]',
   day: 'bg-white/[0.035]',
@@ -90,13 +104,14 @@ export default function App() {
   // companion config: zones + hour format, with live updates
   useEffect(() => {
     let cancelled = false;
+    const zonesOverride = readZonesOverride();
     const load = async () => {
       const [zones, fmt] = await Promise.all([
         readConfig(client, 'zones'),
         readConfig(client, 'hourFormat'),
       ]);
       if (cancelled) return;
-      setZonesRaw(zones ?? DEFAULT_ZONES_CONFIG);
+      setZonesRaw(zonesOverride ?? zones ?? DEFAULT_ZONES_CONFIG);
       if (fmt) setBaseFormat(normalizeHourFormat(fmt));
     };
     load();
@@ -157,6 +172,49 @@ export default function App() {
     setNowMs(n);
   }, []);
 
+  /** Big jump (day flick, overlap hop): the window re-centers with the cursor
+   *  near the left so the hours ahead stay visible. */
+  const jumpBy = useCallback((deltaMs: number) => {
+    setView(v => {
+      const now = Date.now();
+      const cursorMs = Math.min(
+        now + MAX_RANGE_MS,
+        Math.max(now - MAX_RANGE_MS, v.cursorMs + deltaMs),
+      );
+      return { cursorMs, windowStart: Math.floor(cursorMs / HOUR_MS) - 2 };
+    });
+  }, []);
+
+  // latest view/rows for handlers that must not go stale between renders
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+
+  /** Jump the cursor to the next hour where every zone is in 9:00-17:00. */
+  const goToOverlap = useCallback(() => {
+    const v = viewRef.current;
+    const nxt = nextOverlapMs(rowsRef.current, v.cursorMs);
+    if (nxt != null) {
+      setView({ cursorMs: nxt, windowStart: Math.floor(nxt / HOUR_MS) - 2 });
+    }
+  }, []);
+
+  /**
+   * Knob press: go back to now — unless already there, in which case hop to
+   * the next hour that works for every zone (the next all-green hour).
+   */
+  const pressAction = useCallback(() => {
+    const n = Date.now();
+    const cursorHour = Math.floor(viewRef.current.cursorMs / HOUR_MS);
+    if (cursorHour !== Math.floor(n / HOUR_MS)) {
+      setView({ cursorMs: n, windowStart: Math.floor(n / HOUR_MS) - 2 });
+      setNowMs(n);
+    } else {
+      goToOverlap();
+    }
+  }, [goToOverlap]);
+
   const cycleFormat = useCallback(() => {
     setFmtOverride(cur => {
       const next = nextHourFormat(cur ?? baseFormatRef.current);
@@ -174,22 +232,31 @@ export default function App() {
     baseFormatRef.current = baseFormat;
   }, [baseFormat, baseFormatRef]);
 
-  // knob: horizontal wheel moves the time line. knob press: back to now.
-  // back button: cycle 24h -> 12h -> utc.
+  // knob: horizontal wheel moves the time line; a fast flick jumps a day per
+  // detent. knob press: back to now, or to the next all-green hour when
+  // already at now. back button: cycle 24h -> 12h -> utc.
   useEffect(() => {
+    let lastWheelAt = 0;
     const onWheel = (e: WheelEvent) => {
       if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
       e.preventDefault();
-      move(e.deltaX > 0 ? 1 : -1);
+      const dir = e.deltaX > 0 ? 1 : -1;
+      const t = performance.now();
+      const flick = t - lastWheelAt < FLICK_MS;
+      lastWheelAt = t;
+      if (flick) jumpBy(dir * 24 * HOUR_MS);
+      else move(dir);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
-        recenter();
+        pressAction();
       } else if (e.key === 'Escape') {
         cycleFormat();
       } else if (e.key === 'n' || e.key === 'N') {
         recenter();
+      } else if (e.key === 'o' || e.key === 'O') {
+        goToOverlap();
       } else if (e.key === 't' || e.key === 'T') {
         cycleFormat();
       }
@@ -200,10 +267,11 @@ export default function App() {
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKey);
     };
-  }, [move, recenter, cycleFormat]);
+  }, [move, jumpBy, pressAction, recenter, goToOverlap, cycleFormat]);
 
   const cursorCol = (view.cursorMs - view.windowStart * HOUR_MS) / HOUR_MS;
   const nowCol = (nowMs - view.windowStart * HOUR_MS) / HOUR_MS;
+  const cursorOverlap = isOverlapAt(rows, view.cursorMs);
   const gridLeft = (frac: number) => `calc(${LABEL_COL_PX}px + (100% - ${LABEL_COL_PX}px) * ${frac / VISIBLE_COLS})`;
 
   const homeOffset = offsetMinutesAt(home.iana, view.cursorMs);
@@ -217,6 +285,11 @@ export default function App() {
             timezones
           </span>
           <span className="font-mono text-row text-near">{dateLabel(view.cursorMs, home.iana)}</span>
+          {cursorOverlap && (
+            <span className="font-mono text-[10px] tracking-[0.16em] text-emerald-300 uppercase">
+              ✓ overlap
+            </span>
+          )}
         </div>
         <div className="flex items-baseline gap-3">
           <span className="font-mono text-hint tracking-[0.14em] text-dim uppercase">
@@ -327,7 +400,10 @@ export default function App() {
           className="pointer-events-none absolute top-0 bottom-0 w-[3px] bg-amber-300 shadow-[0_0_12px_rgba(252,211,77,0.55)]"
           style={{ left: gridLeft(cursorCol) }}
         >
-          <div className="absolute -top-0 -translate-x-1/2 rounded-sm bg-amber-300 px-2 py-0.5 font-mono text-[11px] font-semibold text-black tabular-nums">
+          <div
+            className="absolute -top-0 -translate-x-1/2 rounded-sm bg-amber-300 px-2 py-0.5 font-mono text-[11px] font-semibold text-black tabular-nums"
+            data-overlap={cursorOverlap ? 'true' : 'false'}
+          >
             {timeLabel(view.cursorMs, home.iana, labelMode)}
           </div>
         </div>
@@ -336,7 +412,7 @@ export default function App() {
       {/* footer hints */}
       <div className="flex h-7 shrink-0 items-center justify-between border-t border-rule px-6">
         <span className="font-mono text-[10px] tracking-[0.16em] text-dim uppercase">
-          knob · move line&ensp;&ensp;press · now&ensp;&ensp;back · format
+          knob · move · flick day&ensp;&ensp;press · now / overlap&ensp;&ensp;back · format
         </span>
         <span className="font-mono text-[10px] tracking-[0.16em] text-dim uppercase">
           {mode}

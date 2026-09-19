@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0 — 2026-09-19
+
+- **Day flick**: spinning the knob fast now jumps a day per detent instead of
+  an hour, so reaching next week doesn't take 168 clicks.
+- **Overlap hop**: pressing the knob while already at "now" jumps straight to
+  the next hour where every zone is in 9:00–17:00 (the next all-green column);
+  a "✓ overlap" badge marks the selected moment when it qualifies. When no
+  hour works for all zones (e.g. New York ↔ Kathmandu), the press is a no-op.
+- Test seam: `?zones=` URL param overrides the companion config (headless
+  testing only, not user-facing).
+
 ## 0.1.0 — 2026-09-18
 
 - Initial release. Worldtimebuddy-style hour grid ported from

@@ -14,8 +14,10 @@ grid — every row's header instantly shows that exact moment in its zone, so
 line reaches the edge of the screen, the whole window slides over like a
 sliding window, so you can scrub days into the future or past.
 
-- **Knob** — move the time line (±1 hour per detent, ±30 days range)
-- **Knob press / Space** — jump back to now
+- **Knob** — move the time line (±1 hour per detent, ±30 days range);
+  spin it fast and each detent jumps a **day** instead
+- **Knob press / Space** — jump back to now; press again while at now to hop
+  to the next hour where *every* zone is in 9:00–17:00 (the next all-green hour)
 - **Back button / Esc** — cycle 24h → 12h → UTC (UTC pins a reference row)
 - Green hour labels mark columns where *every* zone is in 9:00–17:00 —
   the "good for everyone" meeting windows

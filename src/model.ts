@@ -223,6 +223,29 @@ export function isOverlapHour(hour: number): boolean {
   return hour >= 9 && hour < 17;
 }
 
+/**
+ * True when every given zone's local wall-clock hour at an instant is a core
+ * overlap hour. Mirrors the green column-header highlight exactly (pass the
+ * same row list the grid renders, so the UTC reference row counts in utc mode).
+ */
+export function isOverlapAt(zones: RowZone[], utcMs: number): boolean {
+  return zones.every(z => isOverlapHour(wallParts(z.iana, utcMs).hour));
+}
+
+/**
+ * Next hour strictly after `fromMs` where every zone is in core overlap hours.
+ * Returns the absolute ms of that hour, or null when nothing overlaps within
+ * `maxDays` (possible with zones spread across the globe).
+ */
+export function nextOverlapMs(zones: RowZone[], fromMs: number, maxDays = 14): number | null {
+  const fromHour = Math.floor(fromMs / HOUR_MS);
+  const end = fromHour + maxDays * 24;
+  for (let h = fromHour + 1; h <= end; h++) {
+    if (isOverlapAt(zones, h * HOUR_MS)) return h * HOUR_MS;
+  }
+  return null;
+}
+
 /** One grid cell's hour label. 12h stays short like worldtimebuddy: "1p", "11a". */
 export function hourLabel(hour: number, mode: HourFormat): string {
   if (mode !== '12h') return String(hour);
