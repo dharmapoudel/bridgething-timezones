@@ -1,6 +1,6 @@
 import { BridgethingClient } from '@bridgething/client';
 import { daemonUrl } from '@bridgething/webapp-shared/daemon';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ZonePicker, { type PickerStage } from './ZonePicker';
 import {
   DEFAULT_ZONES_CONFIG,
@@ -96,6 +96,89 @@ const TINT_CLASS: Record<string, string> = {
   day: 'bg-white/[0.035]',
   night: 'bg-black/40 text-white/35',
 };
+
+/**
+ * One row's timeline cells. Memoized: cell content depends only on the zone,
+ * the window position, and the hour format — cursor moves and clock ticks
+ * re-render the tree, and without this each would redo the wall-clock lookup
+ * for every cell.
+ */
+const RowCells = memo(function RowCells({
+  zone,
+  windowStart,
+  labelMode,
+}: {
+  zone: RowZone;
+  windowStart: number;
+  labelMode: HourFormat;
+}) {
+  return (
+    <>
+      {Array.from({ length: VISIBLE_COLS }, (_, c) => {
+        const colMs = (windowStart + c) * HOUR_MS;
+        const cp = wallParts(zone.iana, colMs);
+        const midnight = cp.hour === 0;
+        return (
+          <div
+            key={c}
+            className={`flex items-center justify-center border-l border-rule/40 ${TINT_CLASS[tintFor(cp.hour)]} ${
+              midnight ? 'border-l-2 border-l-amber-200/50' : ''
+            }`}
+          >
+            <span className="font-mono text-hint tabular-nums opacity-80">
+              {hourLabel(cp.hour, labelMode)}
+            </span>
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
+/** The hour header row. Memoized for the same reason as RowCells. */
+const ColumnHeaders = memo(function ColumnHeaders({
+  homeIana,
+  rows,
+  windowStart,
+  labelMode,
+}: {
+  homeIana: string;
+  rows: RowZone[];
+  windowStart: number;
+  labelMode: HourFormat;
+}) {
+  return (
+    <>
+      {Array.from({ length: VISIBLE_COLS }, (_, c) => {
+        const colMs = (windowStart + c) * HOUR_MS;
+        const p = wallParts(homeIana, colMs);
+        const midnight = p.hour === 0;
+        const overlap = rows.every(z => isOverlapHour(wallParts(z.iana, colMs).hour));
+        return (
+          <div
+            key={c}
+            className={`flex h-9 flex-col items-center justify-center border-l border-rule/60 ${
+              midnight ? 'border-l-2 border-l-amber-200/70' : ''
+            }`}
+          >
+            <span
+              className={`font-mono text-row tabular-nums ${
+                overlap ? 'text-emerald-300' : midnight ? 'text-amber-100' : 'text-near'
+              }`}
+            >
+              {hourLabel(p.hour, labelMode)}
+            </span>
+            {midnight && (
+              <span className="font-mono text-[9px] tracking-[0.12em] text-dim uppercase">
+                {dayLabel(p.weekday, p.day)}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+});
 
 export default function App() {
   const client = useMemo(makeClient, []);
@@ -267,10 +350,10 @@ export default function App() {
     });
   }, []);
 
-  const baseFormatRef = useMemo(() => ({ current: baseFormat }), []);
+  const baseFormatRef = useRef(baseFormat);
   useEffect(() => {
     baseFormatRef.current = baseFormat;
-  }, [baseFormat, baseFormatRef]);
+  }, [baseFormat]);
 
   // timezone picker: long-press a row label to add a zone
   const [picker, setPicker] = useState<PickerStage | null>(null);
@@ -441,7 +524,12 @@ export default function App() {
 
   const cursorCol = (view.cursorMs - view.windowStart * HOUR_MS) / HOUR_MS;
   const nowCol = (nowMs - view.windowStart * HOUR_MS) / HOUR_MS;
-  const cursorOverlap = isOverlapAt(rows, view.cursorMs);
+  // the overlap badge only needs recomputing when the cursor hour or the
+  // zone list changes, not on every clock tick
+  const cursorOverlap = useMemo(
+    () => isOverlapAt(rows, view.cursorMs),
+    [rows, view.cursorMs],
+  );
   const gridLeft = (frac: number) => `calc(${LABEL_COL_PX}px + (100% - ${LABEL_COL_PX}px) * ${frac / VISIBLE_COLS})`;
 
   const homeOffset = offsetMinutesAt(home.iana, view.cursorMs);
@@ -477,33 +565,12 @@ export default function App() {
         style={{ gridTemplateColumns: `${LABEL_COL_PX}px repeat(${VISIBLE_COLS}, 1fr)` }}
       >
         <div className="h-9 bg-black/30" />
-        {Array.from({ length: VISIBLE_COLS }, (_, c) => {
-          const colMs = (view.windowStart + c) * HOUR_MS;
-          const p = wallParts(home.iana, colMs);
-          const midnight = p.hour === 0;
-          const overlap = rows.every(z => isOverlapHour(wallParts(z.iana, colMs).hour));
-          return (
-            <div
-              key={c}
-              className={`flex h-9 flex-col items-center justify-center border-l border-rule/60 ${
-                midnight ? 'border-l-2 border-l-amber-200/70' : ''
-              }`}
-            >
-              <span
-                className={`font-mono text-row tabular-nums ${
-                  overlap ? 'text-emerald-300' : midnight ? 'text-amber-100' : 'text-near'
-                }`}
-              >
-                {hourLabel(p.hour, labelMode)}
-              </span>
-              {midnight && (
-                <span className="font-mono text-[9px] tracking-[0.12em] text-dim uppercase">
-                  {dayLabel(p.weekday, p.day)}
-                </span>
-              )}
-            </div>
-          );
-        })}
+        <ColumnHeaders
+          homeIana={home.iana}
+          rows={rows}
+          windowStart={view.windowStart}
+          labelMode={labelMode}
+        />
       </div>
 
       {/* zone rows */}
@@ -545,23 +612,7 @@ export default function App() {
                     {[abbr, diff].filter(Boolean).join(' · ') || '—'}
                   </div>
                 </div>
-                {Array.from({ length: VISIBLE_COLS }, (_, c) => {
-                  const colMs = (view.windowStart + c) * HOUR_MS;
-                  const cp = wallParts(z.iana, colMs);
-                  const midnight = cp.hour === 0;
-                  return (
-                    <div
-                      key={c}
-                      className={`flex items-center justify-center border-l border-rule/40 ${TINT_CLASS[tintFor(cp.hour)]} ${
-                        midnight ? 'border-l-2 border-l-amber-200/50' : ''
-                      }`}
-                    >
-                      <span className="font-mono text-hint tabular-nums opacity-80">
-                        {hourLabel(cp.hour, labelMode)}
-                      </span>
-                    </div>
-                  );
-                })}
+                <RowCells zone={z} windowStart={view.windowStart} labelMode={labelMode} />
               </div>
             );
           })}
@@ -607,7 +658,9 @@ export default function App() {
           highlight={pickerHighlight}
           added={addedSet}
           labelMode={labelMode}
-          nowMs={nowMs}
+          // the picker's per-zone times only change once a minute; quantizing
+          // keeps the 15s clock tick from recomputing every list row
+          nowMs={Math.floor(nowMs / 60000) * 60000}
           hasDeviceZones={deviceZones != null}
           onPickRegion={region => {
             setPicker({ region });

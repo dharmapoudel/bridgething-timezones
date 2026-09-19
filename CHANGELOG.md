@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — 2026-09-19
+
+- Code cleanup: extracted the shared zone-record parser used by JSON config
+  and device storage; simplified the base-format ref.
+- Performance: grid cells and column headers are memoized — cursor moves and
+  the 15s clock tick no longer redo the wall-clock lookup for every cell;
+  timezone offsets are cached; the picker's per-zone times quantize to the
+  minute.
+- Store assets: 800×480 screenshots (grid, overlap state, timezone picker)
+  and a 1024×1024 PNG of the Orbit icon.
+
 ## 0.3.0 — 2026-09-19
 
 - **Timezone picker**: long-press any row label (550ms, same gesture as Radio

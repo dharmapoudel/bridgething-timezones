@@ -91,6 +91,26 @@ function defaultZones(): Zone[] {
 }
 
 /**
+ * Parse one zone record from JSON config or device storage.
+ * Returns null when the record is invalid.
+ */
+function parseZoneRecord(rec: unknown): Zone | null {
+  if (!rec || typeof rec !== 'object') return null;
+  const r = rec as Record<string, unknown>;
+  if (typeof r.label !== 'string' || !r.label.trim()) return null;
+  const label = r.label.trim();
+  const zone = typeof r.zone === 'string' ? r.zone.trim() : '';
+  return {
+    label,
+    shortLabel:
+      (typeof r.shortLabel === 'string' && r.shortLabel.trim()) || deriveShort(label),
+    zone,
+    abbr: typeof r.abbr === 'string' && r.abbr.trim() ? r.abbr.trim() : undefined,
+    home: zone === '' ? true : r.home === true ? true : undefined,
+  };
+}
+
+/**
  * Parse the `zones` config. Accepts either a JSON array
  *   [{"label":"New York","shortLabel":"NY","zone":"America/New_York"}, ...]
  * or a compact phone-friendly string
@@ -103,26 +123,11 @@ export function parseZonesConfig(raw: string | null | undefined): Zone[] {
 
   if (text.startsWith('[')) {
     try {
-      const arr = JSON.parse(text) as Array<{
-        label?: unknown;
-        shortLabel?: unknown;
-        zone?: unknown;
-        abbr?: unknown;
-        home?: unknown;
-      }>;
+      const arr = JSON.parse(text) as unknown[];
       const zones: Zone[] = [];
       for (const z of arr) {
-        if (!z || typeof z.label !== 'string' || !z.label.trim()) continue;
-        const label = z.label.trim();
-        const zone = typeof z.zone === 'string' ? z.zone.trim() : '';
-        zones.push({
-          label,
-          shortLabel:
-            (typeof z.shortLabel === 'string' && z.shortLabel.trim()) || deriveShort(label),
-          zone,
-          abbr: typeof z.abbr === 'string' && z.abbr.trim() ? z.abbr.trim() : undefined,
-          home: zone === '' ? true : z.home === true ? true : undefined,
-        });
+        const parsed = parseZoneRecord(z);
+        if (parsed) zones.push(parsed);
       }
       if (zones.length > 0) return zones;
     } catch {
@@ -228,12 +233,31 @@ export function wallParts(iana: string, utcMs: number): WallParts {
   return { hour, minute, weekday, day, month };
 }
 
-/** Signed minutes east of UTC for a zone at an instant (DST-aware). */
-export function offsetMinutesAt(iana: string, utcMs: number): number {
+const offsetCache = new Map<string, number>();
+const OFFSET_CACHE_MAX = 2048;
+
+function offsetMinutesUncached(iana: string, utcMs: number): number {
   const d = new Date(utcMs);
   const loc = new Date(d.toLocaleString('en-US', { timeZone: iana }));
   const utc = new Date(d.toLocaleString('en-US', { timeZone: 'UTC' }));
   return Math.round((loc.getTime() - utc.getTime()) / 60000);
+}
+
+/**
+ * Signed minutes east of UTC for a zone at an instant (DST-aware).
+ * Results are cached: the same (zone, instant) pair is asked repeatedly
+ * across renders (every row header, every tick), and the underlying
+ * toLocaleString round-trip is the most expensive call in the render path.
+ * The cache is bounded; when full it is cleared and rebuilt.
+ */
+export function offsetMinutesAt(iana: string, utcMs: number): number {
+  const key = `${iana}:${utcMs}`;
+  const hit = offsetCache.get(key);
+  if (hit !== undefined) return hit;
+  const val = offsetMinutesUncached(iana, utcMs);
+  if (offsetCache.size >= OFFSET_CACHE_MAX) offsetCache.clear();
+  offsetCache.set(key, val);
+  return val;
 }
 
 export type Tint = 'work' | 'day' | 'night';
@@ -362,21 +386,8 @@ export function readDeviceZones(): Zone[] | null {
     if (!Array.isArray(arr)) return null;
     const zones: Zone[] = [];
     for (const z of arr) {
-      if (!z || typeof z !== 'object') continue;
-      const rec = z as Record<string, unknown>;
-      if (typeof rec.label !== 'string' || !rec.label.trim()) continue;
-      const label = rec.label.trim();
-      const zone = typeof rec.zone === 'string' ? rec.zone.trim() : '';
-      zones.push({
-        label,
-        shortLabel:
-          (typeof rec.shortLabel === 'string' && rec.shortLabel.trim()) ||
-          deriveShort(label),
-        zone,
-        abbr:
-          typeof rec.abbr === 'string' && rec.abbr.trim() ? rec.abbr.trim() : undefined,
-        home: zone === '' ? true : rec.home === true ? true : undefined,
-      });
+      const parsed = parseZoneRecord(z);
+      if (parsed) zones.push(parsed);
     }
     return zones.length > 0 ? zones : null;
   } catch {
