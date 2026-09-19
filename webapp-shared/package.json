@@ -1,0 +1,52 @@
+{
+  "name": "@bridgething/webapp-shared",
+  "type": "module",
+  "private": false,
+  "version": "0.1.0",
+  "exports": {
+    "./daemon": {
+      "types": "./dist/daemon.d.ts",
+      "default": "./dist/daemon.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "default": "./dist/vite.js"
+    },
+    "./push": {
+      "types": "./dist/push.d.ts",
+      "default": "./dist/push.js"
+    },
+    "./tsconfig.json": "./tsconfig.json",
+    "./gitignore": "./gitignore",
+    "./styles.css": "./styles.css"
+  },
+  "files": [
+    "dist",
+    "tsconfig.json",
+    "gitignore",
+    "styles.css"
+  ],
+  "scripts": {
+    "prebuild": "rm -rf dist",
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsc -p tsconfig.build.json --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "peerDependencies": {
+    "@msgpack/msgpack": "*",
+    "@tailwindcss/vite": "*",
+    "@vitejs/plugin-react": "*",
+    "tailwindcss": "*",
+    "typescript": "*",
+    "vite": "*"
+  },
+  "devDependencies": {
+    "@bridgething/extension": "^0.12.1",
+    "@types/bun": "^1.4.0",
+    "deno": "^2.9.6"
+  }
+}

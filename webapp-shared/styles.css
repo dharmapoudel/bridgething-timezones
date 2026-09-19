@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+@import './ui-css/fonts.css';
+@import './ui-css/theme.css';
+
+:root {
+  color-scheme: only dark;
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html,
+  body {
+    width: 800px;
+    height: 480px;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}

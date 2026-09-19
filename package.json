@@ -1,0 +1,30 @@
+{
+  "name": "@dharmapoudel/webapp-timezones",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:device": "vite --mode device",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "push": "bun scripts/push.ts"
+  },
+  "dependencies": {
+    "@bridgething/client": "^0.12.1",
+    "@bridgething/webapp-shared": "file:./webapp-shared",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@msgpack/msgpack": "^3.1.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.2.2"
+  }
+}
