@@ -1,11 +1,14 @@
 import { BridgethingClient } from '@bridgething/client';
 import { daemonUrl } from '@bridgething/webapp-shared/daemon';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ZonePicker, { type PickerStage } from './ZonePicker';
 import {
   DEFAULT_ZONES_CONFIG,
   HOUR_MS,
   MAX_RANGE_MS,
   VISIBLE_COLS,
+  allTimeZones,
+  clearDeviceZones,
   dateLabel,
   dayLabel,
   diffLabel,
@@ -18,13 +21,20 @@ import {
   normalizeHourFormat,
   offsetMinutesAt,
   parseZonesConfig,
+  prettyZoneLabel,
+  readDeviceZones,
   resolveZones,
+  shortForIana,
   timeLabel,
   tintFor,
   wallParts,
   withUtcRow,
+  writeDeviceZones,
+  zoneRegions,
+  zonesInRegion,
   type HourFormat,
   type RowZone,
+  type Zone,
 } from './model';
 
 const CONFIG_TIMEOUT_MS = 1500;
@@ -130,10 +140,19 @@ export default function App() {
     return () => window.clearInterval(t);
   }, []);
 
-  const zones: RowZone[] = useMemo(
-    () => resolveZones(parseZonesConfig(zonesRaw ?? DEFAULT_ZONES_CONFIG)),
-    [zonesRaw],
+  // zones the user added on-device (localStorage; wins over companion config)
+  const [deviceZones, setDeviceZones] = useState<Zone[] | null>(readDeviceZones);
+
+  const zoneDefs: Zone[] = useMemo(
+    () =>
+      parseZonesConfig(
+        deviceZones
+          ? JSON.stringify(deviceZones)
+          : (zonesRaw ?? DEFAULT_ZONES_CONFIG),
+      ),
+    [deviceZones, zonesRaw],
   );
+  const zones: RowZone[] = useMemo(() => resolveZones(zoneDefs), [zoneDefs]);
   const rows: RowZone[] = useMemo(
     () => (mode === 'utc' ? withUtcRow(zones) : zones),
     [zones, mode],
@@ -142,6 +161,27 @@ export default function App() {
     () => rows.find(z => z.home) ?? rows[0],
     [rows],
   );
+
+  /** Add an IANA zone from the picker. Already-added zones are not selectable,
+   *  so each timeline exists at most once. */
+  const addZone = useCallback(
+    (iana: string) => {
+      if (zones.some(z => z.iana === iana)) return;
+      const label = prettyZoneLabel(iana);
+      const next: Zone[] = [
+        ...zoneDefs,
+        { label, shortLabel: shortForIana(iana), zone: iana },
+      ];
+      writeDeviceZones(next);
+      setDeviceZones(next);
+    },
+    [zones, zoneDefs],
+  );
+
+  const resetDeviceZones = useCallback(() => {
+    clearDeviceZones();
+    setDeviceZones(null);
+  }, []);
 
   const move = useCallback((dir: 1 | -1) => {
     setView(v => {
@@ -232,15 +272,126 @@ export default function App() {
     baseFormatRef.current = baseFormat;
   }, [baseFormat, baseFormatRef]);
 
+  // timezone picker: long-press a row label to add a zone
+  const [picker, setPicker] = useState<PickerStage | null>(null);
+  const [pickerHighlight, setPickerHighlight] = useState(0);
+  const pickerRef = useRef(picker);
+  pickerRef.current = picker;
+  const pickerHighlightRef = useRef(pickerHighlight);
+  pickerHighlightRef.current = pickerHighlight;
+  const allZones = useMemo(allTimeZones, []);
+  const addedSet = useMemo(() => new Set(rows.map(z => z.iana)), [rows]);
+
+  const openPicker = useCallback(() => {
+    setPicker({ region: null });
+    setPickerHighlight(0);
+  }, []);
+  const closePicker = useCallback(() => setPicker(null), []);
+
+  const pickerItemCount = useCallback(() => {
+    const st = pickerRef.current;
+    if (!st) return 0;
+    if (st.region == null) return zoneRegions(allZones).length;
+    return zonesInRegion(allZones, st.region).length;
+  }, [allZones]);
+
+  const movePickerHighlight = useCallback(
+    (dir: 1 | -1, step = 1) => {
+      const len = pickerItemCount();
+      if (len === 0) return;
+      const next = Math.max(
+        0,
+        Math.min(len - 1, pickerHighlightRef.current + dir * step),
+      );
+      setPickerHighlight(next);
+      requestAnimationFrame(() => {
+        document
+          .querySelector('[data-phl="true"]')
+          ?.scrollIntoView({ block: 'nearest' });
+      });
+    },
+    [pickerItemCount],
+  );
+
+  const pickerSelect = useCallback(() => {
+    const st = pickerRef.current;
+    if (!st) return;
+    const i = pickerHighlightRef.current;
+    if (st.region == null) {
+      const region = zoneRegions(allZones)[i];
+      if (region) {
+        setPicker({ region });
+        setPickerHighlight(0);
+      }
+      return;
+    }
+    const iana = zonesInRegion(allZones, st.region)[i];
+    if (iana && !addedSet.has(iana)) {
+      addZone(iana);
+      setPicker(null);
+    }
+  }, [allZones, addedSet, addZone]);
+
+  const pickerBack = useCallback(() => {
+    const st = pickerRef.current;
+    if (!st) return;
+    if (st.region != null) {
+      setPicker({ region: null });
+      setPickerHighlight(0);
+    } else {
+      setPicker(null);
+    }
+  }, []);
+
+  // long-press a row label (550ms, 12px slop) to open the picker; the
+  // follow-up tap is swallowed so it doesn't trigger anything else.
+  const pressTimer = useRef<number | null>(null);
+  const pressStartPos = useRef<{ x: number; y: number } | null>(null);
+  const cancelLabelPress = useCallback(() => {
+    if (pressTimer.current != null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
+    pressStartPos.current = null;
+  }, []);
+  const onLabelPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      pressStartPos.current = { x: e.clientX, y: e.clientY };
+      if (pressTimer.current != null) window.clearTimeout(pressTimer.current);
+      pressTimer.current = window.setTimeout(() => {
+        pressTimer.current = null;
+        pressStartPos.current = null;
+        openPicker();
+      }, 550);
+    },
+    [openPicker],
+  );
+  const onLabelPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const s = pressStartPos.current;
+      if (s && Math.hypot(e.clientX - s.x, e.clientY - s.y) > 12) cancelLabelPress();
+    },
+    [cancelLabelPress],
+  );
+
   // knob: horizontal wheel moves the time line; a fast flick jumps a day per
   // detent. knob press: back to now, or to the next all-green hour when
   // already at now. back button: cycle 24h -> 12h -> utc.
+  // While the picker is open the knob drives the picker list instead.
   useEffect(() => {
     let lastWheelAt = 0;
     const onWheel = (e: WheelEvent) => {
       if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
       e.preventDefault();
       const dir = e.deltaX > 0 ? 1 : -1;
+      // picker open: the knob drives the picker list, not the time line
+      if (pickerRef.current) {
+        const t = performance.now();
+        const flick = t - lastWheelAt < FLICK_MS;
+        lastWheelAt = t;
+        movePickerHighlight(dir, flick ? 5 : 1);
+        return;
+      }
       const t = performance.now();
       const flick = t - lastWheelAt < FLICK_MS;
       lastWheelAt = t;
@@ -248,6 +399,15 @@ export default function App() {
       else move(dir);
     };
     const onKey = (e: KeyboardEvent) => {
+      if (pickerRef.current) {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          pickerSelect();
+        } else if (e.key === 'Escape') {
+          pickerBack();
+        }
+        return;
+      }
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         pressAction();
@@ -267,7 +427,17 @@ export default function App() {
       window.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKey);
     };
-  }, [move, jumpBy, pressAction, recenter, goToOverlap, cycleFormat]);
+  }, [
+    move,
+    jumpBy,
+    pressAction,
+    recenter,
+    goToOverlap,
+    cycleFormat,
+    movePickerHighlight,
+    pickerSelect,
+    pickerBack,
+  ]);
 
   const cursorCol = (view.cursorMs - view.windowStart * HOUR_MS) / HOUR_MS;
   const nowCol = (nowMs - view.windowStart * HOUR_MS) / HOUR_MS;
@@ -306,7 +476,7 @@ export default function App() {
         className="grid shrink-0 border-y border-rule"
         style={{ gridTemplateColumns: `${LABEL_COL_PX}px repeat(${VISIBLE_COLS}, 1fr)` }}
       >
-        <div className="h-9" />
+        <div className="h-9 bg-black/30" />
         {Array.from({ length: VISIBLE_COLS }, (_, c) => {
           const colMs = (view.windowStart + c) * HOUR_MS;
           const p = wallParts(home.iana, colMs);
@@ -352,7 +522,16 @@ export default function App() {
                 className="grid min-h-0 flex-1 border-b border-rule/60"
                 style={{ gridTemplateColumns: `${LABEL_COL_PX}px repeat(${VISIBLE_COLS}, 1fr)` }}
               >
-                <div className="flex flex-col justify-center gap-0.5 px-4">
+                <div
+                  className="flex flex-col justify-center gap-0.5 bg-black/30 px-4 touch-none"
+                  data-row-label={z.shortLabel}
+                  onPointerDown={onLabelPointerDown}
+                  onPointerMove={onLabelPointerMove}
+                  onPointerUp={cancelLabelPress}
+                  onPointerCancel={cancelLabelPress}
+                  onPointerLeave={cancelLabelPress}
+                  onContextMenu={e => e.preventDefault()}
+                >
                   <div className="flex items-center gap-2">
                     <span className="truncate font-mono text-row font-semibold tracking-[0.08em] uppercase">
                       {z.shortLabel}
@@ -419,6 +598,32 @@ export default function App() {
           <span className="text-emerald-300/80"> · green = good for all</span>
         </span>
       </div>
+
+      {/* timezone picker modal (long-press a row label) */}
+      {picker && (
+        <ZonePicker
+          allZones={allZones}
+          stage={picker}
+          highlight={pickerHighlight}
+          added={addedSet}
+          labelMode={labelMode}
+          nowMs={nowMs}
+          hasDeviceZones={deviceZones != null}
+          onPickRegion={region => {
+            setPicker({ region });
+            setPickerHighlight(0);
+          }}
+          onPickZone={iana => {
+            addZone(iana);
+            setPicker(null);
+          }}
+          onClose={closePicker}
+          onReset={() => {
+            resetDeviceZones();
+            setPicker(null);
+          }}
+        />
+      )}
     </div>
   );
 }

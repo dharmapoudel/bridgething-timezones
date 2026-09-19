@@ -59,6 +59,33 @@ function deriveShort(label: string): string {
   return (initials || label.slice(0, 3).toUpperCase()).slice(0, 4);
 }
 
+/** "New York" from "America/New_York". */
+export function prettyZoneLabel(iana: string): string {
+  const parts = iana.split('/');
+  return (parts[parts.length - 1] ?? iana).replace(/_/g, ' ');
+}
+
+/** Short badge ("NY") for an IANA name. */
+export function shortForIana(iana: string): string {
+  return deriveShort(prettyZoneLabel(iana));
+}
+
+/** "America" from "America/New_York"; zoneless names land in "Other". */
+export function zoneRegion(iana: string): string {
+  const i = iana.indexOf('/');
+  return i < 0 ? 'Other' : iana.slice(0, i);
+}
+
+/** Sorted unique region list for the picker. */
+export function zoneRegions(allZones: string[]): string[] {
+  return [...new Set(allZones.map(zoneRegion))].sort((a, b) => a.localeCompare(b));
+}
+
+/** Zones of one region, in allZones order. */
+export function zonesInRegion(allZones: string[], region: string): string[] {
+  return allZones.filter(z => zoneRegion(z) === region);
+}
+
 function defaultZones(): Zone[] {
   return parseZonesConfig(DEFAULT_ZONES_CONFIG);
 }
@@ -318,3 +345,83 @@ export function nextHourFormat(mode: HourFormat): HourFormat {
   const i = HOUR_FORMATS.indexOf(normalizeHourFormat(mode));
   return HOUR_FORMATS[(i + 1) % HOUR_FORMATS.length];
 }
+
+const DEVICE_ZONES_KEY = 'timezones.zones.v1';
+
+/**
+ * Zones the user added on-device via the timezone picker. The companion
+ * config API is read-only, so device-side edits live here (like the hour
+ * format override) and take precedence over the companion `zones` value.
+ * Clearing them hands control back to the companion settings.
+ */
+export function readDeviceZones(): Zone[] | null {
+  try {
+    const raw = localStorage.getItem(DEVICE_ZONES_KEY);
+    if (!raw) return null;
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return null;
+    const zones: Zone[] = [];
+    for (const z of arr) {
+      if (!z || typeof z !== 'object') continue;
+      const rec = z as Record<string, unknown>;
+      if (typeof rec.label !== 'string' || !rec.label.trim()) continue;
+      const label = rec.label.trim();
+      const zone = typeof rec.zone === 'string' ? rec.zone.trim() : '';
+      zones.push({
+        label,
+        shortLabel:
+          (typeof rec.shortLabel === 'string' && rec.shortLabel.trim()) ||
+          deriveShort(label),
+        zone,
+        abbr:
+          typeof rec.abbr === 'string' && rec.abbr.trim() ? rec.abbr.trim() : undefined,
+        home: zone === '' ? true : rec.home === true ? true : undefined,
+      });
+    }
+    return zones.length > 0 ? zones : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeDeviceZones(zones: Zone[]): void {
+  try {
+    localStorage.setItem(DEVICE_ZONES_KEY, JSON.stringify(zones));
+  } catch {
+    // storage unavailable; the add just won't persist
+  }
+}
+
+export function clearDeviceZones(): void {
+  try {
+    localStorage.removeItem(DEVICE_ZONES_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** All IANA names, from the device's own tzdata when available. */
+export function allTimeZones(): string[] {
+  try {
+    const zs = Intl.supportedValuesOf('timeZone');
+    if (zs.length > 0) return zs.slice().sort();
+  } catch {
+    // fall through to the curated list
+  }
+  return FALLBACK_ZONES.slice().sort();
+}
+
+/** Curated fallback for runtimes without Intl.supportedValuesOf. */
+const FALLBACK_ZONES = [
+  'UTC',
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Anchorage', 'Pacific/Honolulu', 'America/Toronto', 'America/Vancouver',
+  'America/Mexico_City', 'America/Sao_Paulo', 'America/Buenos_Aires', 'America/Bogota',
+  'Atlantic/Azores', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Rome',
+  'Europe/Madrid', 'Europe/Amsterdam', 'Europe/Zurich', 'Europe/Stockholm',
+  'Europe/Athens', 'Europe/Istanbul', 'Europe/Moscow', 'Africa/Cairo',
+  'Africa/Johannesburg', 'Africa/Nairobi', 'Asia/Dubai', 'Asia/Karachi',
+  'Asia/Kolkata', 'Asia/Kathmandu', 'Asia/Dhaka', 'Asia/Bangkok', 'Asia/Singapore',
+  'Asia/Hong_Kong', 'Asia/Shanghai', 'Asia/Tokyo', 'Asia/Seoul',
+  'Australia/Perth', 'Australia/Sydney', 'Pacific/Auckland', 'Pacific/Fiji',
+];

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-09-19
+
+- **Timezone picker**: long-press any row label (550ms, same gesture as Radio
+  Atlas) to open a region → zone picker with every IANA timezone, grouped by
+  region and showing each zone's current local time. Knob scrolls the list,
+  press selects, back steps out. Zones already on the grid are dimmed with a
+  checkmark and can't be added twice. Additions persist on the device
+  (localStorage) and take precedence over the companion config; a "reset to
+  companion" option in the picker footer clears them.
+- **Muted first column**: row-label cells now sit on a translucent black wash
+  so the timeline grid carries the visual weight.
+- **New app icon**: "Orbit" — a minimal amber dot on a thin tick ring,
+  hand-drawn as a sharp-cornered square SVG.
+- Test seams: `?zones=` URL param overrides the companion config (headless
+  testing only, not user-facing).
+
 ## 0.2.0 — 2026-09-19
 
 - **Day flick**: spinning the knob fast now jumps a day per detent instead of
